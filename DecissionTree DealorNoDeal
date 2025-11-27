@@ -1,0 +1,121 @@
+import pandas as pd
+import pyodbc
+import numpy as np
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+from PIL import Image
+import graphviz
+import pydotplus
+from sklearn import tree
+
+def connection(DRIVER, SERVER, UID, PWD, DATABASE):
+    try:
+        conn = pyodbc.connect(
+            f'DRIVER={DRIVER};'
+            f'SERVER={SERVER};'
+            f'UID={UID};'
+            f'PWD={PWD};'
+            f'DATABASE={DATABASE};'
+            'Trusted_Connection=yes'
+        )
+        return conn
+    except Exception as e:
+        print(f'Not Connection: {e}')
+
+def get_data(conn, query):
+    try:
+        df = pd.read_sql(query, conn)
+        return df
+    except Exception as e:
+        print(f'Not Get Connection: {e}')
+
+conn = connection(
+    'ODBC Driver 17 for SQL Server',    
+    'localhost\\MSSQLSERVER01',
+    'user',
+    'password',
+    'AdventureWorks2022'
+)
+
+dataset = get_data(
+    conn,
+    """
+    SELECT soh.CustomerID, soh.OrderDate,sod.ProductID,TaxAmt, Freight, TotalDue, OrderQty, p.Name AS DescriptionProduct, ProductNumber, Color, Size, Weight, ProductLine, Class, Style, psc.Name, pc.Name AS Category
+    FROM [Sales].[SalesOrderHeader] soh
+    JOIN [Sales].[SalesOrderDetail] sod ON soh.SalesOrderID = sod.SalesOrderID
+    JOIN [Production].[Product] p ON sod.ProductID = p.ProductID
+    LEFT JOIN [Production].[ProductSubcategory] psc ON p.ProductSubcategoryID = psc.ProductSubcategoryID
+    LEFT JOIN [Production].[ProductCategory] pc ON psc.ProductCategoryID = pc.ProductCategoryID;
+    """
+)
+
+
+def data_cleaning(data):
+   data = data.fillna(0) 
+   data.columns = data.columns.str.strip().str.replace(' ', '')
+   data = data.round({
+       'TaxAmt':2,
+       'Freight':2,
+       'TotalDue':2
+   })
+   return data
+
+dataset = data_cleaning(dataset)
+
+dataset = dataset.groupby([
+    'CustomerID', 'OrderDate','ProductID', 
+    'Color','Weight','ProductLine','Class',
+    'Style','Name','Category'
+]).agg({
+    'TaxAmt': 'sum',	
+    'Freight': 'sum',	
+    'TotalDue': 'sum',	
+    'OrderQty': 'sum'
+}).reset_index()
+
+
+dataset['Target'] = np.where(dataset['TotalDue'] > 24131.40, 'Si', 'No')
+dataset['Month'] = pd.to_datetime(dataset['OrderDate']).dt.strftime('%m')
+dataset = dataset.drop(['OrderDate', 'Name', 'CustomerID','ProductID'], axis=1)
+
+Encoder = LabelEncoder()
+for col in ['Color', 'ProductLine','Class','Style','Category', 'Target']:
+    dataset[col] = Encoder.fit_transform(dataset[col].astype(str))
+
+x = dataset.drop(['Target'], axis=1)
+y = dataset['Target'].values
+
+#Creacion de grupo de entrenamiento y prueba
+x_train, x_test, y_train, y_test = train_test_split(x,y, test_size=0.20, random_state=1)
+
+#Crear objeto de clasificacion de arbol de decision
+model_tree = DecisionTreeClassifier()
+
+#Aplicacion del algoritmo de arboles de decision a los grupos de entrenamiento
+fit = model_tree.fit(x_train, y_train)
+
+#Predeccion de la respuesta para el grupo de prueba
+predict = model_tree.predict(x_test)
+
+#Matriz de confusion 
+cm = confusion_matrix(y_test, predict)
+cm
+
+#Estadisticas de desempeño 
+print(classification_report(y_test, predict))
+
+#Creacion de informacion para el arbol (regla de decision)
+dot_data = tree.export_graphviz(model_tree, out_file=None, feature_names=x.columns, class_names=['No compra', 'Si compra'])
+
+#Creacion de la grafica del arbol
+graph = pydotplus.graph_from_dot_data(dot_data)
+
+#Creacion del arbol en formato pdf
+graph.write_png('Compras.png')
+
+#Abrir png
+image = Image.open('Compras.png')
+image.show()
