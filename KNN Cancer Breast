@@ -1,0 +1,75 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+from sklearn.metrics import roc_curve
+from sklearn.metrics import auc
+
+ruta = r'C:Downloads\Breast-cancer.csv'
+pd.set_option('display.max_columns', None)
+df = pd.read_csv(ruta)
+
+for columna in df.columns:
+    nulos = df[columna].isnull().sum()
+    if nulos > 0:
+        print(f'La columna {columna} tiene {nulos} valores nulos')
+    
+df.drop(['id', 'Unnamed: 32'], axis=1, inplace=True)
+M = df.diagnosis == 'M'
+B = df.diagnosis == 'B'
+df.diagnosis = [1 if each == 'M' else 0 for each in df.diagnosis]
+x = df.drop(['diagnosis'], axis=1)
+y = df.diagnosis.values
+#Normalizacion 
+x = (x - np.min(x)) / (np.max(x) - np.min(x))
+x_entrenamiento, x_prueba, y_entrenamiento, y_prueba = train_test_split(x,y, test_size=0.30, random_state=1)
+#KNN
+knn = KNeighborsClassifier(n_neighbors=3)
+knn.fit(x_entrenamiento, y_entrenamiento)
+prediccion = knn.predict(x_prueba)
+print('Score: ', knn.score(x_prueba, y_prueba))
+#Matriz de confusion
+matriz_confusion = confusion_matrix(prediccion, y_prueba)
+matriz_confusion
+
+f, ax = plt.subplots(figsize = (5,5))
+sns.heatmap(matriz_confusion, annot=True, linewidths=0.5, linecolor='red',  fmt='.0f', ax=ax)
+plt.xlabel('y pronosticada')
+plt.ylabel('Y prueba')
+plt.show()
+
+#Calculo de precision global
+correctos = matriz_confusion[0,0] + matriz_confusion[1,1]
+incorrectos = matriz_confusion[0,1] + matriz_confusion[1,0]
+PrecisionGlobal = correctos / (correctos + incorrectos)
+print(f'Precision Global: {PrecisionGlobal}')
+
+#Precision beningno
+precision_beningno = matriz_confusion[0,0] / (matriz_confusion[0,0] + matriz_confusion[1,0])
+print(f'Precision benigno: {precision_beningno}')
+
+#Precision maligno 
+precision_maligno = matriz_confusion[1,1] / (matriz_confusion[1,1] + matriz_confusion[0,1])
+print(f'Precision maligno: {precision_maligno}')
+
+#Score
+y_scores = knn.predict_proba(x_prueba)
+
+"""
+fpr: False Positive Rate
+tpr: True Positive Rate1
+"""
+fpr, tpr, threshold = roc_curve(y_prueba, y_scores[:,1])
+roc_auc = auc(fpr, tpr)
+
+plt.plot(fpr, tpr, 'b', label=f'AUC = {roc_auc}')
+plt.legend(loc = 'lower right')
+plt.plot([0,1], 'r--')
+plt.xlim([0,1])
+plt.ylim([0,1])
+plt.ylabel('Tasa de positivos verdaderos')
+plt.xlabel('Tasa de falsos positivos')
+plt.title('Curva ROC de KNN')
