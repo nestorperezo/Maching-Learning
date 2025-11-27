@@ -1,0 +1,129 @@
+# %% library
+
+import pandas as pd 
+import pyodbc
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
+np.set_printoptions(suppress=True)
+pd.set_option('display.float_format', '{:,.02f}'.format)
+
+try:
+    #%% CONEXIN
+    def connection(DRIVER, SERVER, USER, PASSWORD, DATABASE):
+        conn = pyodbc.connect(
+            f'DRIVER={DRIVER};'
+            f'SERVER={SERVER};'
+            f'UID={USER};'
+            f'PWD={PASSWORD};'
+            f'DATABASE={DATABASE};'
+        )
+        return conn
+    
+    def get_data(conn, query):
+        df = pd.read_sql(query, conn)
+        return df 
+    
+    conn = connection(
+        'ODBC Driver 17 for SQL Server',
+        'server',
+        'user',
+        'password',
+        'database'
+        )
+    
+    query = "SELECT * FROM DB.dbo.StockOut WHERE YEAR(FechaEmision) >= 2025"
+    
+    #%% Reporte
+    if conn:        
+        StockData = get_data(conn, query)
+
+        def Fechas(df):
+            df['Fecha'] = pd.to_datetime(df['FechaEmision']).dt.strftime('%Y-%m')
+            df['Año'] = pd.to_datetime(df['FechaEmision']).dt.strftime('%Y')
+            df['Mes'] = pd.to_datetime(df['FechaEmision']).dt.strftime('%m')
+            return df
+        StockData = Fechas(StockData)
+        
+        def ETL(df):
+            df.columns = df.columns.str.strip()
+            df['StockOutFlag'] = np.where(
+                df['Existencia'] == 0,
+                'StockOut',
+                'NoStockOut')
+            for col in ['Asignado', 'Existencia', 'Venta', 'Pedido', 'Transito']:
+                df[col] = df[col].fillna(0).astype(int)
+            return df
+        StockData = ETL(StockData)
+
+        def Promedio_Movil(df):
+            df['PromedioMovil'] =  df['Venta'].rolling(window=7).mean()
+            return df 
+        StockData = Promedio_Movil(StockData)
+
+        correlacion = StockData[['Asignado','Existencia','Pedido','Venta','USDNeto','MXNNeto','Transito']].corr()
+        print(f'{correlacion}\n')
+        sns.heatmap(correlacion, linewidths=0.2, annot=False, linecolor='white')
+
+        for col in ['Asignado','Existencia','Pedido','Venta','USDNeto','MXNNeto','Transito']:
+            promedio = StockData[col].mean()
+            max = StockData[col].max()
+            min = StockData[col].min()
+            varianza = StockData[col].var()
+            DesviacionEstandar = StockData[col].std()
+            print(f'Columna: {col}')
+            print(f'Promedio: {promedio}')
+            print(f'Max: {max}')
+            print(f'Min: {min}')
+            print(f'Varianza: {varianza:.2f}')
+            print(f'Desviacion Estandar: {DesviacionEstandar:.2f}\n')
+
+        encoders = {}
+
+        for col in ['Articulo', 'StockOutFlag', 'Mes', 'Almacen', 'Categoria', 'Grupo', 'Familia', 'Estatus', 'Proveedor']:
+            StockData[col] = StockData[col].astype(str)
+            Encoder = LabelEncoder()
+            StockData[col] = Encoder.fit_transform(StockData[col]) 
+            encoders[col] = Encoder
+
+        for col, le in encoders.items():
+            mapping = dict(zip(le.classes_, le.transform(le.classes_)))
+            print(f'{col}: {mapping}\n')
+
+        StockData.columns
+
+        x = StockData[['Articulo', 'Categoria', 'Grupo', 'Familia', 'Estatus',
+                       'Proveedor', 'Almacen', 'Asignado', 'Existencia', 'Pedido',
+                       'Venta', 'USDNeto', 'MXNNeto', 'Transito', 'Mes']]
+        
+        y = StockData['StockOutFlag']
+
+        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.20, random_state=42)
+
+        knn = KNeighborsClassifier()
+        knn.fit(x_train, y_train)
+        predict = knn.predict(x_test)
+
+        print(classification_report(y_test, predict))
+
+        Comparativo = pd.DataFrame({
+            "y_test": y_test,
+            "predict": predict
+        })
+        Comparativo["correcto"] = Comparativo["y_test"] == Comparativo["predict"]
+        
+        cm = confusion_matrix(y_test, predict)
+        sns.heatmap(cm, cmap="crest", linecolor='white', fmt='.0f', annot=True)
+        #Comparativo.to_excel(r"C:\Users\nperez\Downloads\Comparativo.xlsx", index=False)
+
+except Exception as e:
+    print(f'Error:{e}')
