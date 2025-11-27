@@ -1,0 +1,102 @@
+# app.py
+import streamlit as st
+import pandas as pd
+import numpy as np
+import pyodbc
+
+pd.set_option('display.max_columns', None)
+
+# --- Conexion a la base de datos ---
+def connection(driver, server, uid, pwd, database):
+    conn = pyodbc.connect(
+        f'DRIVER={driver};'
+        f'SERVER={server};'
+        f'UID={uid};'
+        f'PWD={pwd};'
+        f'DATABASE={database};'  # corregido DATABAASE -> DATABASE
+    )
+    return conn
+
+def get_data(conn, query):
+    dataset = pd.read_sql(query, conn)
+    return dataset
+
+# --- Funciones ETL ---
+def Fechas(df):
+    df['FechaEmision'] = pd.to_datetime(df['FechaEmision'])
+    df['Fecha'] = df['FechaEmision'].dt.strftime('%Y-%m')
+    df['Año'] = df['FechaEmision'].dt.year
+    df['Mes'] = df['FechaEmision'].dt.month
+    df['Semana'] = df['FechaEmision'].dt.isocalendar().week
+    df['Trimestre'] = df['FechaEmision'].dt.to_period('Q').astype(str)
+    df['DiaSemana'] = df['FechaEmision'].dt.strftime('%A')
+    return df
+
+def etl(df):
+    for col in ['Cantidad', 'Precio', 'DescuentoLinea', 'DescuentoGlobal']:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+
+    df['USD'] = ((df['Cantidad'] * df['Precio']) * df['TCUSD'])
+    df['MXN'] = ((df['Cantidad'] * df['Precio']) * df['TCMXN'])
+
+    df['Importe'] = df['Cantidad'] * df['Precio']
+    df['Importe'] *= (1 - (df['DescuentoLinea'] / 100))
+    df['Importe'] *= (1 - (df['DescuentoGlobal'] / 100))
+
+    df['ImporteNetoUSD'] = df['Importe'] * df['TCUSD']
+    df['ImporteNetoMXN'] = df['Importe'] * df['TCMXN']
+
+    return df
+
+# --- Interfaz Streamlit ---
+st.title("Chatbot de Ventas — Cinco Soles")
+
+# Entrada de parametros
+driver = 'ODBC Driver 17 for SQL Server'
+server = 'servidor'
+uid = 'user'
+pwd = 'password'
+database = 'database'
+
+if st.button("Conectar a la base de datos"):
+    try:
+        conn = connection(driver, server, uid, pwd, database)
+        st.success("Conectado correctamente a SQL Server")
+
+        ventas = get_data(conn, "SELECT * FROM DB.dbo.Venta WHERE YEAR(FechaEmision) >= 2023")
+        ventas = Fechas(ventas)
+        ventas = etl(ventas)
+
+        st.write("Datos cargados:", ventas.head())
+
+        # Chatbot-style inputs
+        st.subheader("Consultar ventas")
+        Almacen = st.text_input("Sucursal:")
+        DiaInicio = st.date_input("Fecha inicial:")
+        DiaFin = st.date_input("Fecha final:")
+
+        if st.button("Consultar"):
+            filtro = (
+                (ventas['Almacen'].astype(str) == Almacen) &
+                (ventas['FechaEmision'] >= pd.to_datetime(DiaInicio)) &
+                (ventas['FechaEmision'] <= pd.to_datetime(DiaFin))
+            )
+            ventas_filtradas = ventas.loc[filtro]
+
+            if ventas_filtradas.empty:
+                st.warning(f"No hay ventas registradas para {Almacen} entre {DiaInicio} y {DiaFin}.")
+            else:
+                total_mxn = ventas_filtradas['ImporteNetoMXN'].sum()
+                total_usd = ventas_filtradas['ImporteNetoUSD'].sum()
+                Cantidad = ventas_filtradas['Cantidad'].sum()
+
+                st.success(f"**Sucursal:** {Almacen}")
+                st.write(f"**MXN:** {total_mxn:,.2f}")
+                st.write(f"**USD:** {total_usd:,.2f}")
+                st.write(f"**Cantidad total:** {Cantidad}")
+
+                st.dataframe(ventas_filtradas[['FechaEmision', 'Articulo', 'Cantidad', 'ImporteNetoMXN', 'ImporteNetoUSD']])
+
+    except Exception as e:
+        st.error(f"Error: {e}")
